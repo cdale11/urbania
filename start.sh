@@ -22,7 +22,18 @@ fi
 if command -v wasm-pack >/dev/null 2>&1; then
   npm run build-wasm
 else
-  echo "Warning: wasm-pack not found – you must build the wasm module manually."
+  echo "wasm-pack not found – attempting to install via cargo..."
+  if command -v cargo >/dev/null 2>&1; then
+    cargo install wasm-pack
+    # After installation, run the build again
+    if command -v wasm-pack >/dev/null 2>&1; then
+      npm run build-wasm
+    else
+      echo "Failed to install wasm-pack – please install it manually."
+    fi
+  else
+    echo "Cargo not found – cannot install wasm-pack automatically. Install wasm-pack manually."
+  fi
 fi
 
 # Run the Vite development server (listening on 0.0.0.0:8000 as configured in vite.config.ts)
