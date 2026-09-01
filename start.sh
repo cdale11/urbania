@@ -18,5 +18,12 @@ else
   npm install
 fi
 
+# Build the WebAssembly module (outputs to ./public/pkg)
+if command -v wasm-pack >/dev/null 2>&1; then
+  npm run build-wasm
+else
+  echo "Warning: wasm-pack not found – you must build the wasm module manually."
+fi
+
 # Run the Vite development server (listening on 0.0.0.0:8000 as configured in vite.config.ts)
 npm run dev
