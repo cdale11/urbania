@@ -1,0 +1,14 @@
+[workspace]
+members = [
+    "crates/sim-core",
+    "crates/world-gen",
+    "crates/render-data",
+    "crates/procgen",
+    "crates/economy",
+    "crates/transport",
+    "crates/services",
+    "crates/agents",
+    "crates/ml-runtime",
+    "crates/persistence",
+    "crates/shared-protocol"
+]
