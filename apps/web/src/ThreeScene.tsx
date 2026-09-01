@@ -28,6 +28,8 @@ const ThreeScene: React.FC = () => {
 
     const container = mountRef.current;
     const renderer = getRenderer(container);
+    // Append the renderer's canvas element to the container so it becomes visible.
+    container.appendChild(renderer.domElement);
     const scene = new THREE.Scene();
 
     // Camera – basic perspective camera positioned at (0, 5, 10) looking at origin.
