@@ -6,5 +6,9 @@ export default defineConfig({
   server: {
     host: '0.0.0.0',
     port: 8000,
+    proxy: {
+      '/health': 'http://localhost:8001',
+      '/cities': 'http://localhost:8001',
+    },
   },
 });

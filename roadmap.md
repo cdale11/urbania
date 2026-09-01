@@ -7,12 +7,18 @@
   - Three.js setup (WebGPU/WebGL2 fallback)
   - Deterministic RNG, fixed simulation clock
   - Basic save/load stub
-- [ ] **Phase 1 – Terrain + Roads** (priority: high, blockers: Phase 0)
-  - Procedural terrain generation
+- [x] **Phase 1 – Multi-city Server + Roads scaffold** (priority: high, blockers: Phase 0) (completed 2026-09-01)
+  - `shared-protocol` multi-city WS protocol (CityId, WorldDelta, Snapshot)
+  - `persistence` SQLite multi-city schema (cities, city_chunks)
+  - `urbania-server` Axum multi-city endpoints + WS + tick loop (10 Hz) + SQLite
+  - `transport` deterministic RoadGraph (spec 9) with validation/invariants
+  - `start.sh` parallel server (8001) + Vite (8000) with proxy, `urbania` conda env
+  - All workspace tests passing (7/7 crates + persistence integration)
+- [ ] **Phase 1b – Terrain + Roads integration** (priority: high, blockers: Phase 1)
+  - Procedural terrain generation (Perlin + watershed) integrated into city chunks
   - Water, vegetation
-  - Road graph implementation
-  - Road drawing tool and preview
-  - Chunk streaming
+  - Road drawing tool and preview (isometric 2.5D)
+  - Chunk streaming + delta sync via WS
 - [ ] **Phase 2 – Zoning + Procedural Development** (priority: high, blockers: Phase 1)
   - Parcel generation
   - Zoning system

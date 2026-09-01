@@ -1,11 +1,40 @@
-//! Shared command protocol between the front‑end (TypeScript) and the simulation core (Rust).
-//!
-//! This module defines a minimal set of commands sufficient for the Phase 0 skeleton.
-//! It mirrors the TypeScript definitions in `packages/protocol`.
+//! Shared protocol between browser client (TypeScript) and Rust server.
+//! Defines multi-city types, commands, deltas and WS messages.
+//! Mirrors `packages/protocol` on the TS side.
 
 use serde::{Deserialize, Serialize};
 
-/// Types of commands recognized by the simulation.
+// ---------------------------------------------------------------------------
+// City identity & metadata
+// ---------------------------------------------------------------------------
+
+pub type CityId = i64;
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CityMeta {
+    pub id: CityId,
+    pub name: String,
+    pub seed: u64,
+    pub tick: u64,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CreateCityRequest {
+    pub name: String,
+    /// Optional seed; if None server generates from OsRng
+    pub seed: Option<u64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CreateCityResponse {
+    pub city: CityMeta,
+}
+
+// ---------------------------------------------------------------------------
+// Legacy + extended command types
+// ---------------------------------------------------------------------------
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum CommandType {
     Init,
@@ -13,48 +42,140 @@ pub enum CommandType {
     SetPolicy,
     PlaceRoad,
     ZoneArea,
+    // Multi-city / transport extensions
+    CreateCity,
+    DeleteCity,
+    SaveCity,
+    LoadCity,
+    BuildRoad,
+    RemoveRoad,
 }
 
-/// A player command with a unique ID, a type, and an arbitrary JSON payload.
+/// Player command - now includes city_id for multi-city routing.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PlayerCommand {
-    /// Monotonically increasing identifier.
     pub id: u64,
+    pub city_id: Option<CityId>,
     pub r#type: CommandType,
-    /// Arbitrary key/value payload; using `serde_json::Value` keeps it flexible.
     pub payload: serde_json::Value,
 }
 
-/// Result returned by the simulation after processing a command.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CommandResult {
     pub id: u64,
     pub ok: bool,
-    /// Optional data produced by the simulation.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub data: Option<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
 }
 
 impl PlayerCommand {
-    /// Serialize the command to a JSON string.
     pub fn to_json(&self) -> String {
-        serde_json::to_string(self).expect("failed to serialize PlayerCommand")
+        serde_json::to_string(self).expect("serialize PlayerCommand")
     }
-
-    /// Deserialize from a JSON string.
     pub fn from_json(s: &str) -> Self {
-        serde_json::from_str(s).expect("failed to deserialize PlayerCommand")
+        serde_json::from_str(s).expect("deserialize PlayerCommand")
     }
 }
 
 impl CommandResult {
-    /// Serialize to JSON.
     pub fn to_json(&self) -> String {
-        serde_json::to_string(self).expect("failed to serialize CommandResult")
+        serde_json::to_string(self).expect("serialize CommandResult")
     }
-
-    /// Deserialize from JSON.
     pub fn from_json(s: &str) -> Self {
-        serde_json::from_str(s).expect("failed to deserialize CommandResult")
+        serde_json::from_str(s).expect("deserialize CommandResult")
+    }
+    pub fn ok(id: u64, data: Option<serde_json::Value>) -> Self {
+        Self { id, ok: true, data, error: None }
+    }
+    pub fn err(id: u64, msg: impl Into<String>) -> Self {
+        Self { id, ok: false, data: None, error: Some(msg.into()) }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Chunk / World delta - networking model per spec sec 43
+// ---------------------------------------------------------------------------
+
+/// Minimal chunk representation for wire format (mirrors sim-core::Chunk)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChunkDto {
+    pub cx: i32,
+    pub cy: i32,
+    pub data: serde_json::Value,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorldDelta {
+    pub city_id: CityId,
+    pub tick: u64,
+    pub changed_chunks: Vec<ChunkDto>,
+    /// Generic events (RoadBuilt, etc. - spec sec 45)
+    pub events: Vec<serde_json::Value>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChunkRequest {
+    pub city_id: CityId,
+    pub cx: i32,
+    pub cy: i32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InitialSnapshot {
+    pub city: CityMeta,
+    pub tick: u64,
+    pub chunks: Vec<ChunkDto>,
+}
+
+// ---------------------------------------------------------------------------
+// WS envelope - client <-> server
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum ClientMessage {
+    Command(PlayerCommand),
+    Subscribe { city_id: CityId, radius: Option<u32> },
+    RequestChunk(ChunkRequest),
+    Ping { t: u64 },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum ServerMessage {
+    Snapshot(InitialSnapshot),
+    Delta(WorldDelta),
+    Result(CommandResult),
+    Pong { t: u64 },
+    Error { message: String },
+}
+
+// ---------------------------------------------------------------------------
+// Validation trait mirroring spec sec 54
+// ---------------------------------------------------------------------------
+
+pub trait ValidatableCommand {
+    fn validate(&self, seed: u64) -> Result<(), String>;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn round_trip_command() {
+        let cmd = PlayerCommand { id: 1, city_id: Some(42), r#type: CommandType::BuildRoad, payload: serde_json::json!({"from":[0,0],"to":[1,0]}) };
+        let s = cmd.to_json();
+        let back = PlayerCommand::from_json(&s);
+        assert_eq!(back.id, 1);
+        assert_eq!(back.city_id, Some(42));
+    }
+    #[test]
+    fn ws_envelope_serializes() {
+        let msg = ClientMessage::Command(PlayerCommand { id: 2, city_id: None, r#type: CommandType::Tick, payload: serde_json::json!({}) });
+        let s = serde_json::to_string(&msg).unwrap();
+        let back: ClientMessage = serde_json::from_str(&s).unwrap();
+        assert!(matches!(back, ClientMessage::Command(_)));
     }
 }

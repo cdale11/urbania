@@ -10,5 +10,6 @@ members = [
     "crates/agents",
     "crates/ml-runtime",
     "crates/persistence",
-    "crates/shared-protocol"
+    "crates/shared-protocol",
+    "crates/urbania-server"
 ]

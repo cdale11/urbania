@@ -1,0 +1,28 @@
+[package]
+name = "urbania-server"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+log = "0.4"
+env_logger = "0.10"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+rand = "0.8"
+rand_chacha = "0.3"
+bevy_ecs = "0.12"
+tokio = { version = "1.38", features = ["full"] }
+axum = { version = "0.7", features = ["ws", "json"] }
+sqlx = { version = "0.7", features = ["sqlite", "runtime-tokio-native-tls", "macros"] }
+sim-core = { path = "../sim-core" }
+shared-protocol = { path = "../shared-protocol" }
+persistence = { path = "../persistence" }
+futures-util = "0.3"
+tower-http = { version = "0.5", features = ["cors"] }
+
+[dependencies.tokio-tungstenite]
+version = "0.23"
+optional = true
+
+[features]
+default = []

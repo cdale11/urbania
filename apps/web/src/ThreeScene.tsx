@@ -8,19 +8,23 @@ function getRenderer(container: HTMLElement): THREE.Renderer {
   const canvas = document.createElement('canvas');
   const context = canvas.getContext('webgl2') as WebGL2RenderingContext | null;
   if (context) {
-    const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
-    renderer.setPixelRatio(window.devicePixelRatio);
-    renderer.setSize(container.clientWidth, container.clientHeight);
-    return renderer;
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+      renderer.setPixelRatio(window.devicePixelRatio);
+      renderer.setSize(container.clientWidth, container.clientHeight);
+renderer.setClearColor(0x87ceeb, 1);
+      return renderer;
   }
   // As a fallback, use the basic WebGLRenderer.
   const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
   renderer.setPixelRatio(window.devicePixelRatio);
   renderer.setSize(container.clientWidth, container.clientHeight);
+  renderer.setClearColor(0x87ceeb, 1);
   return renderer;
 }
 
 const TERRAIN_SIZE = 64; // vertices per side
+// Scale factor to expand the plane geometry so it fills the view.
+const PLANE_SCALE = 10; // multiplies the terrain size for the plane dimensions
 
 const ThreeScene: React.FC = () => {
   const mountRef = useRef<HTMLDivElement>(null);
@@ -42,7 +46,7 @@ const ThreeScene: React.FC = () => {
       0.1,
       1000,
     );
-    camera.position.set(0, 20, 30);
+    camera.position.set(0, 80, 80);
     camera.lookAt(0, 0, 0);
 
     // Ambient + directional light
@@ -56,7 +60,7 @@ const ThreeScene: React.FC = () => {
     const initTerrain = async () => {
       try {
         // Dynamically import the wasm-bindgen generated module
-        const wasm = await import('/pkg/sim_core.js');
+        const wasm = await import("./pkg/sim_core.js");
         // Initialise the wasm module (calls the generated `__wbindgen_start`)
         await wasm.default();
 
@@ -66,8 +70,8 @@ const ThreeScene: React.FC = () => {
 
         // Create a plane geometry whose vertices we will displace using the height map
         const geometry = new THREE.PlaneGeometry(
-          TERRAIN_SIZE,
-          TERRAIN_SIZE,
+          TERRAIN_SIZE * PLANE_SCALE,
+          TERRAIN_SIZE * PLANE_SCALE,
           TERRAIN_SIZE - 1,
           TERRAIN_SIZE - 1,
         );
@@ -75,13 +79,13 @@ const ThreeScene: React.FC = () => {
         const position = geometry.attributes.position as THREE.BufferAttribute;
         for (let i = 0; i < position.count; i++) {
           // Scale the height to a more visible range
-          position.setZ(i, heights[i] * 5);
+          position.setY(i, heights[i] * 20);
         }
         position.needsUpdate = true;
         geometry.computeVertexNormals();
 
         const material = new THREE.MeshStandardMaterial({
-          color: 0x5566aa,
+          color: 0x228b22,
           side: THREE.DoubleSide,
           flatShading: false,
         });
@@ -120,7 +124,7 @@ const ThreeScene: React.FC = () => {
     };
   }, []);
 
-  return <div ref={mountRef} style={{ width: '100%', height: '100vh' }} />;
+  return <div ref={mountRef} style={{ width: '100%', height: '100%' }} />;
 };
 
 export default ThreeScene;

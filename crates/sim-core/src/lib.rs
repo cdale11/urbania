@@ -4,13 +4,15 @@
 
 use rand::{rngs::StdRng, SeedableRng};
 use serde::{Deserialize, Serialize};
+#[cfg(target_arch = "wasm32")]
+use wasm_bindgen::prelude::*;
 use noise::{NoiseFn, Perlin, Seedable};
 
 /// Fixed simulation tick duration in milliseconds.
 pub const TICK_MS: u64 = 100; // 10 Hz default simulation speed
 
 /// Deterministic random number generator wrapper.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct DeterministicRng {
     rng: StdRng,
 }
@@ -29,6 +31,13 @@ impl DeterministicRng {
     pub fn next_f64(&mut self) -> f64 {
         use rand::Rng;
         self.rng.gen()
+    }
+}
+
+/// Default RNG seeded with zero for deserialization fallback.
+impl Default for DeterministicRng {
+    fn default() -> Self {
+        Self::from_seed(0)
     }
 }
 
@@ -75,6 +84,7 @@ pub struct Chunk {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SimulationState {
     pub seed: u64,
+    #[serde(skip)]
     pub rng: DeterministicRng,
     pub clock: SimClock,
     pub chunks: Vec<Chunk>,
@@ -102,6 +112,27 @@ pub fn load_state(path: &std::path::Path) -> std::io::Result<SimulationState> {
     let json = std::fs::read_to_string(path)?;
     let state = serde_json::from_str(&json)?;
     Ok(state)
+}
+
+// WebAssembly export: generate a deterministic height map using Perlin noise.
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+pub fn wasm_generate_height_map(seed: u64, offset_x: i32, offset_y: i32, size: usize) -> Box<[f32]> {
+    // Create a Perlin noise generator seeded for reproducibility.
+    let perlin = Perlin::new(seed as u32);
+    // Frequency scaling factor; adjust as needed.
+    let scale = 0.1_f64;
+    let mut heights = Vec::with_capacity(size * size);
+    for y in 0..size {
+        for x in 0..size {
+            let nx = (offset_x as f64 + x as f64) * scale;
+            let ny = (offset_y as f64 + y as f64) * scale;
+            // Sample noise, map from [-1,1] to [0,1].
+            let value = (perlin.get([nx, ny]) as f32 * 0.5) + 0.5;
+            heights.push(value);
+        }
+    }
+    heights.into_boxed_slice()
 }
 
 
