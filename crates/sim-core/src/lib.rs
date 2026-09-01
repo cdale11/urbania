@@ -4,6 +4,7 @@
 
 use rand::{rngs::StdRng, SeedableRng};
 use serde::{Deserialize, Serialize};
+use noise::{NoiseFn, Perlin, Seedable};
 
 /// Fixed simulation tick duration in milliseconds.
 pub const TICK_MS: u64 = 100; // 10 Hz default simulation speed
