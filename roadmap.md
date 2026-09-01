@@ -1,6 +1,6 @@
 # Roadmap
 
-- [ ] **Phase 0 – Technical skeleton** (priority: high, blockers: none)
+- [x] **Phase 0 – Technical skeleton** (priority: high, blockers: none)
   - Repository layout
   - Cargo workspace
   - Vite + React scaffold
