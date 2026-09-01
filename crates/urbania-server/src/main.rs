@@ -26,8 +26,9 @@ use shared_protocol::{
     BuildRoadRequest, ChunkDto, CityId, CityMeta, ClientMessage, CommandResult, CreateCityRequest,
     CreateCityResponse, InitialSnapshot, PlayerCommand, RoadGraphDto, ServerMessage, WorldPos,
 };
-use sim_core::{DeterministicRng, SimClock, SimulationState, TICK_MS};
+use sim_core::{Chunk, DeterministicRng, SimClock, SimulationState, TICK_MS};
 use transport::RoadGraph;
+use world_gen::generate_chunk;
 
 // ---------------------- Config ----------------------
 #[derive(Debug, Deserialize)]
@@ -200,6 +201,28 @@ async fn build_road_handler(State(state): State<AppState>, Path(city_id): Path<C
     }
 }
 
+// Chunk - procedural generation with persistence fallback (spec 7.2)
+#[derive(Deserialize)]
+struct ChunkPath { id: CityId, cx: i32, cy: i32 }
+
+async fn get_chunk_handler(State(state): State<AppState>, Path(p): Path<ChunkPath>) -> Result<Json<ChunkDto>, (StatusCode, String)> {
+    let city_id = p.id;
+    let wrapper = get_or_load_city(&state, city_id).await?;
+    let guard = wrapper.lock().await;
+    // 1) Check in-memory chunks
+    if let Some(ch) = guard.world.chunks.iter().find(|c| c.x == p.cx && c.y == p.cy) {
+        return Ok(Json(ChunkDto{ cx: ch.x, cy: ch.y, data: ch.data.clone() }));
+    }
+    // 2) Check persistence (sparse delta)
+    // For MVP we skip DB chunk lookup for procedural chunks and generate directly
+    // 3) Procedural generation
+    let seed = guard.world.seed;
+    drop(guard);
+    let chunk = generate_chunk(seed, p.cx, p.cy);
+    // Return as DTO without persisting (sparse)
+    Ok(Json(ChunkDto{ cx: chunk.x, cy: chunk.y, data: chunk.data }))
+}
+
 // ---------------------- WS ----------------------
 async fn ws_handler(State(state): State<AppState>, Path(city_id): Path<CityId>, ws: WebSocketUpgrade) -> Result<impl IntoResponse, (StatusCode, String)> {
     let _ = get_or_load_city(&state, city_id).await?;
@@ -254,11 +277,19 @@ async fn handle_socket(mut socket: WebSocket, state: AppState, city_id: CityId) 
                 let _ = socket.send(Message::Text(serde_json::to_string(&ServerMessage::Pong{t}).unwrap())).await;
             },
             Ok(ClientMessage::RequestChunk(req)) => {
-                let guard = wrapper.lock().await;
-                let chunk = guard.world.chunks.iter().find(|c| c.x==req.cx && c.y==req.cy)
-                    .map(|c| ChunkDto{cx:c.x,cy:c.y,data:c.data.clone()});
-                let resp = chunk.map(|ch| ServerMessage::Delta(shared_protocol::WorldDelta{city_id, tick: guard.world.clock.tick, changed_chunks: vec![ch], changed_roads: None, events: vec![]}))
-                    .unwrap_or(ServerMessage::Error{message:"chunk not found".into()});
+                let (chunkDto, tick) = {
+                    let guard = wrapper.lock().await;
+                    if let Some(ch) = guard.world.chunks.iter().find(|c| c.x==req.cx && c.y==req.cy) {
+                        (ChunkDto{cx: ch.x, cy: ch.y, data: ch.data.clone()}, guard.world.clock.tick)
+                    } else {
+                        let seed = guard.world.seed;
+                        let tick = guard.world.clock.tick;
+                        drop(guard);
+                        let ch = generate_chunk(seed, req.cx, req.cy);
+                        (ChunkDto{cx: ch.x, cy: ch.y, data: ch.data}, tick)
+                    }
+                };
+                let resp = ServerMessage::Delta(shared_protocol::WorldDelta{city_id, tick, changed_chunks: vec![chunkDto], changed_roads: None, events: vec![]});
                 let _ = socket.send(Message::Text(serde_json::to_string(&resp).unwrap())).await;
             },
             Ok(ClientMessage::Subscribe{city_id:_, radius:_}) => {
@@ -336,6 +367,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/cities/:id/command", post(command_handler))
         .route("/cities/:id/save", post(save_city_handler))
         .route("/cities/:id/roads", get(get_roads_handler).post(build_road_handler))
+        .route("/cities/:id/chunks/:cx/:cy", get(get_chunk_handler))
         .route("/cities/:id/ws", get(ws_handler))
         .with_state(app_state);
 

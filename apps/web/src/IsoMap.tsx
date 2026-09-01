@@ -4,9 +4,11 @@ type WorldPos = { x: number; y: number };
 type RoadNode = { id: number; pos: WorldPos; junction: string };
 type RoadEdge = { id: number; start: number; end: number; lanes: number; speed_limit: number; width: number; grade: number };
 type RoadGraph = { nodes: RoadNode[]; edges: RoadEdge[] };
+type ChunkDto = { cx: number; cy: number; data: any };
 
 const TILE_W = 64;
 const TILE_H = 32;
+const CHUNK_SIZE = 16;
 
 function worldToScreen(wx: number, wy: number, offsetX: number, offsetY: number, scale: number) {
   const sx = (wx - wy) * (TILE_W / 2) * scale + offsetX;
@@ -20,17 +22,26 @@ function screenToWorld(sx: number, sy: number, offsetX: number, offsetY: number,
   const wy = (dy / (TILE_H / 2) - dx / (TILE_W / 2)) / 2;
   return { x: Math.round(wx), y: Math.round(wy) };
 }
+function heightToColor(h: number): string {
+  if (h < 0.30) return '#3a6ea5'; // water
+  if (h < 0.35) return '#d2b48c'; // sand
+  if (h < 0.50) return '#6a9a3a'; // grass low
+  if (h < 0.65) return '#4a7a2a'; // grass high
+  if (h < 0.80) return '#8a8a8a'; // rock
+  return '#e8e8e8'; // snow
+}
 
 const IsoMap: React.FC<{ cityId: number }> = ({ cityId }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [graph, setGraph] = useState<RoadGraph>({ nodes: [], edges: [] });
+  const [chunks, setChunks] = useState<Map<string, ChunkDto>>(new Map());
   const [status, setStatus] = useState<string>('loading');
   const [dragStart, setDragStart] = useState<WorldPos | null>(null);
   const [preview, setPreview] = useState<WorldPos | null>(null);
-  const [pan, setPan] = useState({ x: 400, y: 150 });
+  const [pan, setPan] = useState({ x: 400, y: 300 });
   const scale = 1;
 
-  // Fetch initial roads + WS
+  // Fetch roads + WS
   useEffect(() => {
     let ws: WebSocket | null = null;
     let cancelled = false;
@@ -41,26 +52,24 @@ const IsoMap: React.FC<{ cityId: number }> = ({ cityId }) => {
           const dto = await res.json();
           if (!cancelled) setGraph(dto);
         }
-        // Also try WS snapshot
         const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
         ws = new WebSocket(`${proto}//${location.host}/cities/${cityId}/ws`);
         ws.onmessage = (ev) => {
           try {
             const msg = JSON.parse(ev.data);
-            if (msg.kind === 'snapshot' || msg.Snapshot) {
-              // Axum serializes ServerMessage::Snapshot -> {kind:"snapshot", ...} but our Rust uses tag kind snake_case
-              const snap = msg.Snapshot ?? msg;
-              // Handle both shapes
-              const g = msg.road_graph ?? snap.road_graph ?? snap?.Snapshot?.road_graph;
-              if (g) setGraph(g);
-              else if (snap?.road_graph) setGraph(snap.road_graph);
-            }
-            // Handle tagged enum: {kind:"snapshot", ...}
             if (msg.kind === 'snapshot' && msg.road_graph) setGraph(msg.road_graph);
             if (msg.kind === 'delta' && msg.changed_roads) setGraph(msg.changed_roads);
-            if (msg.kind === 'delta' && msg.Delta?.changed_roads) setGraph(msg.Delta.changed_roads);
-            // Fallback: direct Graph
+            if (msg.Snapshot?.road_graph) setGraph(msg.Snapshot.road_graph);
+            if (msg.Delta?.changed_roads) setGraph(msg.Delta.changed_roads);
             if (msg.nodes && msg.edges) setGraph(msg);
+            // Chunk deltas
+            if (msg.kind === 'delta' && msg.changed_chunks?.length) {
+              setChunks(prev => {
+                const m = new Map(prev);
+                for (const ch of msg.changed_chunks) m.set(`${ch.cx},${ch.cy}`, ch);
+                return m;
+              });
+            }
           } catch {}
         };
         ws.onopen = () => setStatus(`connected city ${cityId}`);
@@ -73,7 +82,38 @@ const IsoMap: React.FC<{ cityId: number }> = ({ cityId }) => {
     return () => { cancelled = true; ws?.close(); };
   }, [cityId]);
 
-  // Draw
+  // Fetch terrain chunks - 5x5 around origin
+  useEffect(() => {
+    let cancelled = false;
+    const fetchChunks = async () => {
+      const promises: Promise<void>[] = [];
+      for (let cx = -2; cx <= 2; cx++) {
+        for (let cy = -2; cy <= 2; cy++) {
+          promises.push(
+            fetch(`/cities/${cityId}/chunks/${cx}/${cy}`)
+              .then(r => r.ok ? r.json() : null)
+              .then(dto => {
+                if (dto && !cancelled) {
+                  setChunks(prev => {
+                    const m = new Map(prev);
+                    m.set(`${dto.cx},${dto.cy}`, dto);
+                    return m;
+                  });
+                }
+              })
+              .catch(() => {})
+          );
+        }
+      }
+      await Promise.all(promises);
+      if (!cancelled) setStatus(s => s.includes('connected') ? s : `terrain ${chunks.size} chunks`);
+    };
+    setChunks(new Map());
+    fetchChunks();
+    return () => { cancelled = true; };
+  }, [cityId]);
+
+  // Draw - terrain + grid + roads
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -81,13 +121,38 @@ const IsoMap: React.FC<{ cityId: number }> = ({ cityId }) => {
     if (!ctx) return;
     const draw = () => {
       ctx.clearRect(0, 0, canvas.width, canvas.height);
-      // Grid - draw diamonds for 20x20 range
-      ctx.strokeStyle = '#e0e0e0';
+      // Terrain chunks
+      chunks.forEach(chunk => {
+        const heights: number[] | undefined = chunk.data?.heights;
+        const size: number = chunk.data?.size ?? CHUNK_SIZE;
+        if (!heights) return;
+        for (let ly = 0; ly < size; ly++) {
+          for (let lx = 0; lx < size; lx++) {
+            const h = heights[ly * size + lx];
+            const wx = chunk.cx * size + lx;
+            const wy = chunk.cy * size + ly;
+            const p = worldToScreen(wx, wy, pan.x, pan.y, scale);
+            ctx.fillStyle = heightToColor(h);
+            ctx.beginPath();
+            ctx.moveTo(p.x, p.y - TILE_H / 2);
+            ctx.lineTo(p.x + TILE_W / 2, p.y);
+            ctx.lineTo(p.x, p.y + TILE_H / 2);
+            ctx.lineTo(p.x - TILE_W / 2, p.y);
+            ctx.closePath();
+            ctx.fill();
+            // subtle stroke for terrain definition
+            ctx.strokeStyle = 'rgba(0,0,0,0.08)';
+            ctx.lineWidth = 1;
+            ctx.stroke();
+          }
+        }
+      });
+      // Grid overlay (faint)
+      ctx.strokeStyle = 'rgba(0,0,0,0.12)';
       ctx.lineWidth = 1;
       for (let x = -10; x <= 10; x++) {
         for (let y = -10; y <= 10; y++) {
           const p = worldToScreen(x, y, pan.x, pan.y, scale);
-          // Diamond tile outline
           ctx.beginPath();
           ctx.moveTo(p.x, p.y - TILE_H/2);
           ctx.lineTo(p.x + TILE_W/2, p.y);
@@ -100,7 +165,7 @@ const IsoMap: React.FC<{ cityId: number }> = ({ cityId }) => {
       // Roads
       const nodeMap = new Map<number, WorldPos>();
       graph.nodes.forEach(n => nodeMap.set(n.id, n.pos));
-      ctx.strokeStyle = '#333';
+      ctx.strokeStyle = '#222';
       ctx.lineWidth = 4;
       ctx.lineCap = 'round';
       graph.edges.forEach(e => {
@@ -113,7 +178,6 @@ const IsoMap: React.FC<{ cityId: number }> = ({ cityId }) => {
         ctx.moveTo(pa.x, pa.y);
         ctx.lineTo(pb.x, pb.y);
         ctx.stroke();
-        // lane markers
         ctx.strokeStyle = '#fff';
         ctx.lineWidth = 1;
         ctx.setLineDash([6, 6]);
@@ -122,13 +186,12 @@ const IsoMap: React.FC<{ cityId: number }> = ({ cityId }) => {
         ctx.lineTo(pb.x, pb.y);
         ctx.stroke();
         ctx.setLineDash([]);
-        ctx.strokeStyle = '#333';
+        ctx.strokeStyle = '#222';
         ctx.lineWidth = 4;
       });
-      // Nodes
       graph.nodes.forEach(n => {
         const p = worldToScreen(n.pos.x, n.pos.y, pan.x, pan.y, scale);
-        ctx.fillStyle = n.junction === 'Intersection' ? '#d00' : '#555';
+        ctx.fillStyle = n.junction === 'Intersection' ? '#d00' : '#333';
         ctx.beginPath();
         ctx.arc(p.x, p.y, 5, 0, Math.PI * 2);
         ctx.fill();
@@ -136,7 +199,6 @@ const IsoMap: React.FC<{ cityId: number }> = ({ cityId }) => {
         ctx.lineWidth = 1;
         ctx.stroke();
       });
-      // Preview
       if (dragStart && preview) {
         const pa = worldToScreen(dragStart.x, dragStart.y, pan.x, pan.y, scale);
         const pb = worldToScreen(preview.x, preview.y, pan.x, pan.y, scale);
@@ -151,7 +213,7 @@ const IsoMap: React.FC<{ cityId: number }> = ({ cityId }) => {
       }
     };
     draw();
-  }, [graph, pan, dragStart, preview]);
+  }, [graph, chunks, pan, dragStart, preview]);
 
   const canvasPos = (e: React.MouseEvent<HTMLCanvasElement>) => {
     const rect = (e.target as HTMLCanvasElement).getBoundingClientRect();
@@ -202,10 +264,19 @@ const IsoMap: React.FC<{ cityId: number }> = ({ cityId }) => {
     }
   };
 
-  // Simple pan with right-drag or shift
   const handleWheel = (e: React.WheelEvent) => {
-    // Pan with wheel
     if (e.shiftKey) setPan(p => ({ x: p.x - e.deltaX, y: p.y - e.deltaY }));
+  };
+
+  // Pan with middle mouse
+  const handleMouseDownPan = (e: React.MouseEvent) => {
+    if (e.button === 1) {
+      const start = { x: e.clientX, y: e.clientY, pan: { ...pan } };
+      const onMove = (ev: MouseEvent) => setPan({ x: start.pan.x + (ev.clientX - start.x), y: start.pan.y + (ev.clientY - start.y) });
+      const onUp = () => { window.removeEventListener('mousemove', onMove); window.removeEventListener('mouseup', onUp); };
+      window.addEventListener('mousemove', onMove);
+      window.addEventListener('mouseup', onUp);
+    }
   };
 
   return (
@@ -213,19 +284,26 @@ const IsoMap: React.FC<{ cityId: number }> = ({ cityId }) => {
       <div style={{ padding: '4px 8px', background: '#fafafa', borderBottom: '1px solid #ddd', fontSize: 12, display: 'flex', gap: 12, alignItems: 'center' }}>
         <span>City {cityId}</span>
         <span style={{ color: '#666' }}>{status}</span>
-        <span style={{ color: '#888' }}>{graph.nodes.length} nodes / {graph.edges.length} edges</span>
-        <span style={{ marginLeft: 'auto', color: '#0a84ff' }}>Click-drag to build road (2 lanes, auto-snap)</span>
+        <span style={{ color: '#888' }}>{graph.nodes.length} nodes / {graph.edges.length} edges | {chunks.size} chunks</span>
+        <span style={{ marginLeft: 'auto', color: '#0a84ff' }}>Click-drag to build road • Shift+wheel/middle-drag to pan</span>
       </div>
       <canvas
         ref={canvasRef}
         width={800}
         height={600}
-        style={{ width: '100%', height: '100%', cursor: 'crosshair', background: '#f5f7f0' }}
-        onMouseDown={handleDown}
+        style={{ width: '100%', height: '100%', cursor: 'crosshair', background: '#cfe8ff' }}
+        onMouseDown={e => { handleMouseDownPan(e); handleDown(e); }}
         onMouseMove={handleMove}
         onMouseUp={handleUp}
         onWheel={handleWheel}
       />
+      <div style={{ padding: '2px 8px', fontSize: 10, color: '#666', background: '#f5f7f0', display: 'flex', gap: 8 }}>
+        <span style={{ background: '#3a6ea5', color: '#fff', padding: '0 4px' }}>water &lt;0.30</span>
+        <span style={{ background: '#d2b48c', padding: '0 4px' }}>sand</span>
+        <span style={{ background: '#6a9a3a', color: '#fff', padding: '0 4px' }}>grass</span>
+        <span style={{ background: '#8a8a8a', color: '#fff', padding: '0 4px' }}>rock &gt;0.65</span>
+        <span style={{ background: '#e8e8e8', padding: '0 4px' }}>snow &gt;0.80</span>
+      </div>
     </div>
   );
 };

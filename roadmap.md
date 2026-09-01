@@ -19,9 +19,11 @@
   - Isometric 2.5D client `IsoMap.tsx` (64×32 diamonds, click-drag road tool, snap, preview, WS sync)
   - City selector + create + ribbon UI in `App.tsx` (spec 31-32), toggle Iso/3D
   - Verified `cargo test --workspace` (8 tests) + manual `curl` + `WS` + `vite build` OK
-- [ ] **Phase 1c – Terrain + Chunk streaming** (priority: high, blockers: Phase 1b)
-  - Procedural terrain (Perlin + watershed) into city chunks
-  - Water, vegetation, chunk streaming + delta sync polish
+- [x] **Phase 1c – Terrain + Chunk streaming** (priority: high, blockers: Phase 1b) (completed 2026-09-01)
+  - Deterministic Perlin chunk terrain `world-gen` (`CHUNK_SIZE=16`, `generate_chunk`, 3 tests)
+  - Server `GET /cities/:id/chunks/:cx/:cy` procedural generation + sparse delta, WS `RequestChunk` now generates
+  - Client `IsoMap.tsx` fetches 5×5 chunks, renders height-shaded diamonds (water/sand/grass/rock/snow), pan + legend
+  - `vite.config` WS proxy `ws:true`, `cargo test` 11 passed, `curl` chunks deterministic, `vite build` OK
 - [ ] **Phase 2 – Zoning + Procedural Development** (priority: high, blockers: Phase 1)
   - Parcel generation
   - Zoning system

@@ -8,7 +8,7 @@ export default defineConfig({
     port: 8000,
     proxy: {
       '/health': 'http://localhost:8001',
-      '/cities': 'http://localhost:8001',
+      '/cities': { target: 'http://localhost:8001', ws: true },
     },
   },
 });

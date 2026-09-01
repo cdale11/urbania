@@ -2533,6 +2533,7 @@ dependencies = [
  "tokio-tungstenite 0.23.1",
  "tower-http",
  "transport",
+ "world-gen",
 ]
 
 [[package]]
@@ -2804,6 +2805,12 @@ checksum = "1ebf944e87a7c253233ad6766e082e3cd714b5d03812acc24c318f549614536e"
 [[package]]
 name = "world-gen"
 version = "0.1.0"
+dependencies = [
+ "noise",
+ "serde",
+ "serde_json",
+ "sim-core",
+]
 
 [[package]]
 name = "writeable"

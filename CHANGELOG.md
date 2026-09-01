@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.5.0] - 2026-09-01
+### Added
+- `world-gen` deterministic terrain: `CHUNK_SIZE=16`, `generate_heights`/`generate_chunk` perlin (scale 0.1, seed+cx/cy offset, range [0,1], deterministic + adjacent continuity tests).
+- `urbania-server` chunk streaming: `GET /cities/:id/chunks/:cx/:cy` (procedural fallback via `world-gen` + in-mem check, sparse delta spec 7.2), WS `RequestChunk` now generates procedurally, `vite.config` proxy `ws:true`.
+- `IsoMap.tsx` terrain rendering: fetches 5×5 chunks around origin, draws 16×16 diamonds per chunk with `heightToColor` (water<0.30 blue, sand, grass, rock>0.65, snow>0.80), faint grid, pan with shift+wheel/middle-drag, legend bar, chunk count.
+
 ## [0.4.0] - 2026-09-01
 ### Added
 - RoadGraph persisted per city (`city_road_graph` table) + `save_road_graph`/`load_road_graph` in `persistence` crate.
