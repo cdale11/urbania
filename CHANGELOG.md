@@ -2,6 +2,15 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.4.0] - 2026-09-01
+### Added
+- RoadGraph persisted per city (`city_road_graph` table) + `save_road_graph`/`load_road_graph` in `persistence` crate.
+- `shared-protocol` road DTOs: `WorldPos`, `JunctionType`, `RoadNodeDto`, `RoadEdgeDto`, `RoadGraphDto`, `BuildRoadRequest`; extended `InitialSnapshot` with `road_graph` and `WorldDelta.changed_roads`.
+- `transport` now wraps `RoadGraphDto` (uses `shared-protocol` types) with `from_dto`/`to_dto`, snap/validate/invariants, deterministic grid.
+- `urbania-server` roads integration: `WorldWrapper.roads: RoadGraph`, `GET/POST /cities/:id/roads`, WS `Snapshot` now includes roads + `Delta.changed_roads`, `command_handler` and WS `Command(BuildRoad)` apply via `RoadGraph` and persist.
+- Frontend 2.5D isometric map `apps/web/src/IsoMap.tsx` (64×32 diamond tiles, 20×20 grid, pan, click-drag road preview, auto-snap, `fetch /cities/:id/roads` + WS live sync).
+- `apps/web/src/App.tsx` city selector + create city + ribbon (Build/Zone/Services/Transit/Utilities/Policies per spec 31-32) + toggle Iso/3D views.
+
 ## [0.3.0] - 2026-09-01
 ### Added
 - Multi-city server `crates/urbania-server` (Axum 0.7 + SQLite via `persistence` crate): `GET /health`, `GET/POST /cities`, `GET/DELETE /cities/:id`, `POST /cities/:id/command`, `POST /cities/:id/save`, `WS /cities/:id/ws` with `InitialSnapshot` + `WorldDelta` (spec 43).

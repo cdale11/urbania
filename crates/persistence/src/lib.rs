@@ -81,6 +81,19 @@ pub async fn init_db(pool: &SqlitePool) -> sqlx::Result<()> {
     )
     .execute(pool)
     .await?;
+    // Road graph per city (spec 9) - JSON blob
+    sqlx::query(
+        r#"
+        CREATE TABLE IF NOT EXISTS city_road_graph (
+            city_id INTEGER PRIMARY KEY,
+            data TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            FOREIGN KEY(city_id) REFERENCES cities(id) ON DELETE CASCADE
+        );
+        "#,
+    )
+    .execute(pool)
+    .await?;
     Ok(())
 }
 
@@ -208,6 +221,30 @@ pub async fn save_city_state(pool: &SqlitePool, city_id: CityId, state: &Simulat
     update_city_tick(pool, city_id, state.clock.tick).await?;
     save_city_chunks(pool, city_id, &state.chunks).await?;
     Ok(())
+}
+
+pub async fn save_road_graph(pool: &SqlitePool, city_id: CityId, graph_json: &serde_json::Value) -> sqlx::Result<()> {
+    let data = serde_json::to_string(graph_json).unwrap();
+    sqlx::query(
+        r#"
+        INSERT INTO city_road_graph (city_id, data, updated_at)
+        VALUES (?, ?, datetime('now'))
+        ON CONFLICT(city_id) DO UPDATE SET data = excluded.data, updated_at = datetime('now')
+        "#,
+    )
+    .bind(city_id)
+    .bind(data)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+pub async fn load_road_graph(pool: &SqlitePool, city_id: CityId) -> sqlx::Result<Option<serde_json::Value>> {
+    let row = sqlx::query_as::<_, (String,)>("SELECT data FROM city_road_graph WHERE city_id = ?",)
+        .bind(city_id)
+        .fetch_optional(pool)
+        .await?;
+    Ok(row.map(|(s,)| serde_json::from_str(&s).unwrap()))
 }
 
 #[cfg(test)]

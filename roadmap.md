@@ -14,11 +14,14 @@
   - `transport` deterministic RoadGraph (spec 9) with validation/invariants
   - `start.sh` parallel server (8001) + Vite (8000) with proxy, `urbania` conda env
   - All workspace tests passing (7/7 crates + persistence integration)
-- [ ] **Phase 1b – Terrain + Roads integration** (priority: high, blockers: Phase 1)
-  - Procedural terrain generation (Perlin + watershed) integrated into city chunks
-  - Water, vegetation
-  - Road drawing tool and preview (isometric 2.5D)
-  - Chunk streaming + delta sync via WS
+- [x] **Phase 1b – Roads wired + Isometric client** (priority: high, blockers: Phase 1) (completed 2026-09-01)
+  - RoadGraph persisted per city + REST `GET/POST /cities/:id/roads` + WS snapshot/delta with roads
+  - Isometric 2.5D client `IsoMap.tsx` (64×32 diamonds, click-drag road tool, snap, preview, WS sync)
+  - City selector + create + ribbon UI in `App.tsx` (spec 31-32), toggle Iso/3D
+  - Verified `cargo test --workspace` (8 tests) + manual `curl` + `WS` + `vite build` OK
+- [ ] **Phase 1c – Terrain + Chunk streaming** (priority: high, blockers: Phase 1b)
+  - Procedural terrain (Perlin + watershed) into city chunks
+  - Water, vegetation, chunk streaming + delta sync polish
 - [ ] **Phase 2 – Zoning + Procedural Development** (priority: high, blockers: Phase 1)
   - Parcel generation
   - Zoning system

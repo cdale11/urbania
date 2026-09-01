@@ -106,11 +106,60 @@ pub struct ChunkDto {
     pub data: serde_json::Value,
 }
 
+// Road graph DTOs (spec 9) - shared between transport crate and WS protocol
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Hash)]
+pub struct WorldPos {
+    pub x: i64,
+    pub y: i64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum JunctionType {
+    End,
+    Straight,
+    Intersection,
+    Roundabout,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RoadNodeDto {
+    pub id: u64,
+    pub pos: WorldPos,
+    pub junction: JunctionType,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RoadEdgeDto {
+    pub id: u64,
+    pub start: u64,
+    pub end: u64,
+    pub lanes: u8,
+    pub speed_limit: u16,
+    pub width: f32,
+    pub grade: f32,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct RoadGraphDto {
+    pub nodes: Vec<RoadNodeDto>,
+    pub edges: Vec<RoadEdgeDto>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BuildRoadRequest {
+    pub from: WorldPos,
+    pub to: WorldPos,
+    pub lanes: Option<u8>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WorldDelta {
     pub city_id: CityId,
     pub tick: u64,
     pub changed_chunks: Vec<ChunkDto>,
+    /// Road graph delta - full graph for MVP (incremental later)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub changed_roads: Option<RoadGraphDto>,
     /// Generic events (RoadBuilt, etc. - spec sec 45)
     pub events: Vec<serde_json::Value>,
 }
@@ -127,6 +176,7 @@ pub struct InitialSnapshot {
     pub city: CityMeta,
     pub tick: u64,
     pub chunks: Vec<ChunkDto>,
+    pub road_graph: RoadGraphDto,
 }
 
 // ---------------------------------------------------------------------------

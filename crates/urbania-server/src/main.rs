@@ -9,7 +9,7 @@ use axum::{
     },
     http::StatusCode,
     response::IntoResponse,
-    routing::{delete, get, post},
+    routing::{get, post},
     Json, Router,
 };
 use futures_util::stream::StreamExt;
@@ -18,9 +18,16 @@ use serde::{Deserialize, Serialize};
 use sqlx::SqlitePool;
 use tokio::sync::Mutex;
 
-use persistence::{create_city, delete_city, get_city, init_db, list_cities, load_city_state, save_city_state, update_city_tick};
-use shared_protocol::{CityId, CityMeta, CreateCityRequest, CreateCityResponse, ChunkDto, InitialSnapshot, ClientMessage, ServerMessage, PlayerCommand, CommandResult};
+use persistence::{
+    create_city, delete_city, get_city, init_db, list_cities, load_city_state, load_road_graph,
+    save_city_state, save_road_graph, update_city_tick,
+};
+use shared_protocol::{
+    BuildRoadRequest, ChunkDto, CityId, CityMeta, ClientMessage, CommandResult, CreateCityRequest,
+    CreateCityResponse, InitialSnapshot, PlayerCommand, RoadGraphDto, ServerMessage, WorldPos,
+};
 use sim_core::{DeterministicRng, SimClock, SimulationState, TICK_MS};
+use transport::RoadGraph;
 
 // ---------------------- Config ----------------------
 #[derive(Debug, Deserialize)]
@@ -41,6 +48,7 @@ struct WorldWrapper {
     city_id: CityId,
     city_name: String,
     world: SimulationState,
+    roads: RoadGraph,
     systems: Vec<Box<dyn System + Send + Sync>>,
 }
 
@@ -52,10 +60,10 @@ impl WorldWrapper {
             clock: SimClock { tick, time_ms: tick * TICK_MS },
             chunks: vec![],
         };
-        Self { city_id, city_name, world, systems: vec![] }
+        Self { city_id, city_name, world, roads: RoadGraph::new(), systems: vec![] }
     }
-    fn from_state(city_id: CityId, city_name: String, state: SimulationState) -> Self {
-        Self { city_id, city_name, world: state, systems: vec![] }
+    fn from_state(city_id: CityId, city_name: String, state: SimulationState, roads: RoadGraph) -> Self {
+        Self { city_id, city_name, world: state, roads, systems: vec![] }
     }
     fn register_system<S>(&mut self, s: S) where S: System + Send + Sync + 'static { self.systems.push(Box::new(s)); }
     fn tick(&mut self, dt: Duration) {
@@ -77,19 +85,19 @@ struct AppState {
     cities: Arc<Mutex<CityMap>>,
 }
 
-// Helper to get or load city wrapper
 async fn get_or_load_city(state: &AppState, city_id: CityId) -> Result<Arc<Mutex<WorldWrapper>>, (StatusCode, String)> {
-    // Fast path: already in memory
     {
         let map = state.cities.lock().await;
         if let Some(w) = map.get(&city_id) { return Ok(Arc::clone(w)); }
     }
-    // Load from DB
     let meta = get_city(&state.db, city_id).await.map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
         .ok_or((StatusCode::NOT_FOUND, format!("city {city_id} not found")))?;
     let sim_state = load_city_state(&state.db, city_id).await.map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
         .unwrap_or_else(|| SimulationState { seed: meta.seed, rng: DeterministicRng::from_seed(meta.seed), clock: SimClock { tick: meta.tick, time_ms: meta.tick * TICK_MS }, chunks: vec![] });
-    let wrapper = WorldWrapper::from_state(meta.id, meta.name.clone(), sim_state);
+    // Load road graph
+    let road_json = load_road_graph(&state.db, city_id).await.map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let roads = road_json.and_then(|v| serde_json::from_value::<RoadGraphDto>(v).ok()).map(RoadGraph::from_dto).unwrap_or_else(RoadGraph::new);
+    let wrapper = WorldWrapper::from_state(meta.id, meta.name.clone(), sim_state, roads);
     let arc = Arc::new(Mutex::new(wrapper));
     let mut map = state.cities.lock().await;
     map.insert(city_id, Arc::clone(&arc));
@@ -136,16 +144,27 @@ struct CommandBody { command: PlayerCommand }
 async fn command_handler(State(state): State<AppState>, Path(city_id): Path<CityId>, Json(body): Json<CommandBody>) -> Result<Json<CommandResult>, (StatusCode, String)> {
     let wrapper = get_or_load_city(&state, city_id).await?;
     let mut guard = wrapper.lock().await;
-    // Minimal validation + road stub - in future dispatch to transport crate
     let result = match body.command.r#type {
         shared_protocol::CommandType::BuildRoad | shared_protocol::CommandType::PlaceRoad => {
-            // Store payload as chunk delta placeholder
-            info!("City {} BuildRoad {:?}", city_id, body.command.payload);
-            CommandResult::ok(body.command.id, Some(serde_json::json!({"applied":true})))
+            // Try to parse payload as BuildRoadRequest
+            let req: Result<BuildRoadRequest, _> = serde_json::from_value(body.command.payload.clone());
+            match req {
+                Ok(r) => match guard.roads.apply_build(r) {
+                    Ok(edge_id) => {
+                        let dto = guard.roads.to_dto();
+                        let v = serde_json::to_value(&dto).unwrap();
+                        if let Err(e) = save_road_graph(&state.db, city_id, &v).await {
+                            error!("save_road_graph failed: {}", e);
+                        }
+                        CommandResult::ok(body.command.id, Some(serde_json::json!({"edge_id": edge_id, "applied":true})))
+                    },
+                    Err(e) => CommandResult::err(body.command.id, e),
+                },
+                Err(e) => CommandResult::err(body.command.id, format!("invalid payload: {e}")),
+            }
         },
         _ => CommandResult::ok(body.command.id, Some(serde_json::json!({"ack":true}))),
     };
-    // For now just bump tick to show activity
     guard.world.clock.tick();
     Ok(Json(result))
 }
@@ -154,12 +173,35 @@ async fn save_city_handler(State(state): State<AppState>, Path(city_id): Path<Ci
     let wrapper = get_or_load_city(&state, city_id).await?;
     let guard = wrapper.lock().await;
     save_city_state(&state.db, city_id, &guard.world).await.map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let dto = guard.roads.to_dto();
+    let v = serde_json::to_value(&dto).unwrap();
+    save_road_graph(&state.db, city_id, &v).await.map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     Ok(Json(serde_json::json!({"status":"saved","id":city_id,"tick":guard.world.clock.tick})))
+}
+
+// Roads REST
+async fn get_roads_handler(State(state): State<AppState>, Path(city_id): Path<CityId>) -> Result<Json<RoadGraphDto>, (StatusCode, String)> {
+    let wrapper = get_or_load_city(&state, city_id).await?;
+    let guard = wrapper.lock().await;
+    Ok(Json(guard.roads.to_dto()))
+}
+
+async fn build_road_handler(State(state): State<AppState>, Path(city_id): Path<CityId>, Json(req): Json<BuildRoadRequest>) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    let wrapper = get_or_load_city(&state, city_id).await?;
+    let mut guard = wrapper.lock().await;
+    match guard.roads.apply_build(req) {
+        Ok(edge_id) => {
+            let dto = guard.roads.to_dto();
+            let v = serde_json::to_value(&dto).unwrap();
+            save_road_graph(&state.db, city_id, &v).await.map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+            Ok(Json(serde_json::json!({"status":"ok","edge_id": edge_id, "road_graph": dto})))
+        },
+        Err(e) => Err((StatusCode::BAD_REQUEST, e)),
+    }
 }
 
 // ---------------------- WS ----------------------
 async fn ws_handler(State(state): State<AppState>, Path(city_id): Path<CityId>, ws: WebSocketUpgrade) -> Result<impl IntoResponse, (StatusCode, String)> {
-    // Ensure city exists
     let _ = get_or_load_city(&state, city_id).await?;
     Ok(ws.on_upgrade(move |socket| handle_socket(socket, state, city_id)))
 }
@@ -169,12 +211,11 @@ async fn handle_socket(mut socket: WebSocket, state: AppState, city_id: CityId) 
         Ok(w) => w,
         Err((_, msg)) => { let _ = socket.send(Message::Text(serde_json::to_string(&ServerMessage::Error{message:msg}).unwrap())).await; return; }
     };
-    // Send initial snapshot (spec 43: initial snapshot + deltas)
     let snapshot = {
         let guard = wrapper.lock().await;
         let meta = get_city(&state.db, city_id).await.ok().flatten().unwrap_or(CityMeta{id:city_id,name:guard.city_name.clone(),seed:guard.world.seed,tick:guard.world.clock.tick,created_at:"".into()});
         let chunks: Vec<ChunkDto> = guard.world.chunks.iter().map(|c| ChunkDto{cx:c.x,cy:c.y,data:c.data.clone()}).collect();
-        ServerMessage::Snapshot(InitialSnapshot{city:meta, tick: guard.world.clock.tick, chunks})
+        ServerMessage::Snapshot(InitialSnapshot{city:meta, tick: guard.world.clock.tick, chunks, road_graph: guard.roads.to_dto()})
     };
     if socket.send(Message::Text(serde_json::to_string(&snapshot).unwrap())).await.is_err() { return; }
 
@@ -187,8 +228,27 @@ async fn handle_socket(mut socket: WebSocket, state: AppState, city_id: CityId) 
         let client_msg: Result<ClientMessage, _> = serde_json::from_str(&txt);
         match client_msg {
             Ok(ClientMessage::Command(cmd)) => {
-                let result = CommandResult::ok(cmd.id, Some(serde_json::json!({"city_id":city_id})));
-                let _ = socket.send(Message::Text(serde_json::to_string(&ServerMessage::Result(result)).unwrap())).await;
+                // Apply BuildRoad via WS as well
+                let applied = if matches!(cmd.r#type, shared_protocol::CommandType::BuildRoad | shared_protocol::CommandType::PlaceRoad) {
+                    if let Ok(req) = serde_json::from_value::<BuildRoadRequest>(cmd.payload.clone()) {
+                        let mut guard = wrapper.lock().await;
+                        match guard.roads.apply_build(req) {
+                            Ok(edge_id) => {
+                                let dto = guard.roads.to_dto();
+                                let v = serde_json::to_value(&dto).unwrap();
+                                let _ = save_road_graph(&state.db, city_id, &v).await;
+                                // Broadcast delta to this socket (and could broadcast to others)
+                                let delta = ServerMessage::Delta(shared_protocol::WorldDelta{city_id, tick: guard.world.clock.tick, changed_chunks: vec![], changed_roads: Some(dto), events: vec![serde_json::json!({"type":"RoadBuilt","edge_id":edge_id})]});
+                                let _ = socket.send(Message::Text(serde_json::to_string(&delta).unwrap())).await;
+                                CommandResult::ok(cmd.id, Some(serde_json::json!({"edge_id":edge_id})))
+                            },
+                            Err(e) => CommandResult::err(cmd.id, e),
+                        }
+                    } else { CommandResult::err(cmd.id, "invalid BuildRoad payload") }
+                } else {
+                    CommandResult::ok(cmd.id, Some(serde_json::json!({"city_id":city_id})))
+                };
+                let _ = socket.send(Message::Text(serde_json::to_string(&ServerMessage::Result(applied)).unwrap())).await;
             },
             Ok(ClientMessage::Ping{t}) => {
                 let _ = socket.send(Message::Text(serde_json::to_string(&ServerMessage::Pong{t}).unwrap())).await;
@@ -197,12 +257,11 @@ async fn handle_socket(mut socket: WebSocket, state: AppState, city_id: CityId) 
                 let guard = wrapper.lock().await;
                 let chunk = guard.world.chunks.iter().find(|c| c.x==req.cx && c.y==req.cy)
                     .map(|c| ChunkDto{cx:c.x,cy:c.y,data:c.data.clone()});
-                let resp = chunk.map(|ch| ServerMessage::Delta(shared_protocol::WorldDelta{city_id, tick: guard.world.clock.tick, changed_chunks: vec![ch], events: vec![]}))
+                let resp = chunk.map(|ch| ServerMessage::Delta(shared_protocol::WorldDelta{city_id, tick: guard.world.clock.tick, changed_chunks: vec![ch], changed_roads: None, events: vec![]}))
                     .unwrap_or(ServerMessage::Error{message:"chunk not found".into()});
                 let _ = socket.send(Message::Text(serde_json::to_string(&resp).unwrap())).await;
             },
             Ok(ClientMessage::Subscribe{city_id:_, radius:_}) => {
-                // No-op for now - client already gets deltas via tick loop broadcast (future)
                 let _ = socket.send(Message::Text(serde_json::to_string(&ServerMessage::Error{message:"subscribe ack".into()}).unwrap())).await;
             },
             Err(e) => {
@@ -218,19 +277,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     env_logger::init();
     let cfg = Config::default();
     let db_path = std::env::var("URBANIA_DB").unwrap_or(cfg.database_path.clone());
-    // SqlitePool needs `sqlite://` prefix for file creation
     let db_url = if db_path.contains("://") { db_path.clone() } else { format!("sqlite://{}?mode=rwc", db_path) };
     let db = SqlitePool::connect(&db_url).await?;
     init_db(&db).await?;
-    // Load existing cities into memory
     let cities_meta = list_cities(&db).await?;
     let mut map: CityMap = HashMap::new();
     for meta in cities_meta {
         let state = load_city_state(&db, meta.id).await?.unwrap_or(SimulationState{ seed: meta.seed, rng: DeterministicRng::from_seed(meta.seed), clock: SimClock{tick: meta.tick, time_ms: meta.tick * TICK_MS}, chunks: vec![] });
-        let wrapper = WorldWrapper::from_state(meta.id, meta.name.clone(), state);
+        let road_json = load_road_graph(&db, meta.id).await?.unwrap_or(serde_json::json!({"nodes":[],"edges":[]}));
+        let dto: RoadGraphDto = serde_json::from_value(road_json).unwrap_or_default();
+        let roads = RoadGraph::from_dto(dto);
+        let wrapper = WorldWrapper::from_state(meta.id, meta.name.clone(), state, roads);
         map.insert(meta.id, Arc::new(Mutex::new(wrapper)));
     }
-    // Ensure at least one default city for quick start
     if map.is_empty() {
         let seed = { use rand::RngCore; let mut b=[0u8;8]; rand::rngs::OsRng.fill_bytes(&mut b); u64::from_le_bytes(b) };
         let meta = create_city(&db, "New City", seed).await?;
@@ -241,7 +300,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let shared_cities = Arc::new(Mutex::new(map));
     let app_state = AppState { db: db.clone(), cities: shared_cities.clone() };
 
-    // Tick loop - advances all cities at TICK_MS (10 Hz), persists tick every 100 ticks
     let tick_cities = shared_cities.clone();
     let tick_db = db.clone();
     tokio::spawn(async move {
@@ -277,6 +335,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/cities/:id", get(get_city_handler).delete(delete_city_handler))
         .route("/cities/:id/command", post(command_handler))
         .route("/cities/:id/save", post(save_city_handler))
+        .route("/cities/:id/roads", get(get_roads_handler).post(build_road_handler))
         .route("/cities/:id/ws", get(ws_handler))
         .with_state(app_state);
 
