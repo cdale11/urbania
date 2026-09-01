@@ -59,6 +59,51 @@ pub fn init(seed: u64) -> (DeterministicRng, SimClock) {
     (DeterministicRng::from_seed(seed), SimClock::new())
 }
 
+// --- Phase 0 additional skeletons ---------------------------------------------------
+
+// Placeholder world chunk representation.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Chunk {
+    pub x: i32,
+    pub y: i32,
+    // Arbitrary payload, e.g., terrain data.
+    pub data: serde_json::Value,
+}
+
+// Overall simulation state (seed, RNG, clock, and world chunks).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SimulationState {
+    pub seed: u64,
+    pub rng: DeterministicRng,
+    pub clock: SimClock,
+    pub chunks: Vec<Chunk>,
+}
+
+// Initialise a full simulation state with an empty world.
+pub fn init_state(seed: u64) -> SimulationState {
+    SimulationState {
+        seed,
+        rng: DeterministicRng::from_seed(seed),
+        clock: SimClock::new(),
+        chunks: Vec::new(),
+    }
+}
+
+// Save the simulation state to a JSON file.
+// Returns a Result<(), std::io::Error>.
+pub fn save_state(state: &SimulationState, path: &std::path::Path) -> std::io::Result<()> {
+    let json = serde_json::to_string_pretty(state)?;
+    std::fs::write(path, json)
+}
+
+// Load a simulation state from a JSON file.
+pub fn load_state(path: &std::path::Path) -> std::io::Result<SimulationState> {
+    let json = std::fs::read_to_string(path)?;
+    let state = serde_json::from_str(&json)?;
+    Ok(state)
+}
+
+
 #[cfg(test)]
 mod tests {
     use super::*;

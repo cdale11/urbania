@@ -1,10 +1,10 @@
 import React from 'react';
+import ThreeScene from './ThreeScene';
 
 const App: React.FC = () => {
   return (
-    <div className="app">
-      <h1>Urbania</h1>
-      <p>Welcome to the Browser City Builder prototype.</p>
+    <div style={{ width: '100%', height: '100vh', margin: 0, padding: 0 }}>
+      <ThreeScene />
     </div>
   );
 };
