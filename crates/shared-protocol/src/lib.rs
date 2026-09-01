@@ -160,6 +160,10 @@ pub struct WorldDelta {
     /// Road graph delta - full graph for MVP (incremental later)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub changed_roads: Option<RoadGraphDto>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub changed_zones: Option<Vec<ZoneDto>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub changed_parcels: Option<Vec<ParcelDto>>,
     /// Generic events (RoadBuilt, etc. - spec sec 45)
     pub events: Vec<serde_json::Value>,
 }
@@ -177,6 +181,10 @@ pub struct InitialSnapshot {
     pub tick: u64,
     pub chunks: Vec<ChunkDto>,
     pub road_graph: RoadGraphDto,
+    #[serde(default)]
+    pub zones: Vec<ZoneDto>,
+    #[serde(default)]
+    pub parcels: Vec<ParcelDto>,
 }
 
 // ---------------------------------------------------------------------------
@@ -200,6 +208,69 @@ pub enum ServerMessage {
     Result(CommandResult),
     Pong { t: u64 },
     Error { message: String },
+}
+
+// ---------------------------------------------------------------------------
+// Zoning / Parcel / Buildings (spec 10-11)
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ZoneType {
+    ResidentialLow,
+    ResidentialMedium,
+    ResidentialHigh,
+    Commercial,
+    Office,
+    Industrial,
+    MixedUse,
+    Park,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ZoneDto {
+    pub id: i64,
+    pub city_id: CityId,
+    pub x1: i64,
+    pub y1: i64,
+    pub x2: i64,
+    pub y2: i64,
+    pub zone_type: ZoneType,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CreateZoneRequest {
+    pub x1: i64,
+    pub y1: i64,
+    pub x2: i64,
+    pub y2: i64,
+    pub zone_type: ZoneType,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ParcelDto {
+    pub id: i64,
+    pub zone_id: i64,
+    pub x: i64,
+    pub y: i64,
+    pub w: i64,
+    pub h: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BuildingDto {
+    pub id: i64,
+    pub parcel_id: i64,
+    pub archetype: String,
+    pub height: f32,
+    pub footprint: serde_json::Value,
+}
+
+// Extend WorldDelta / Snapshot with zones
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ZonesDelta {
+    pub zones: Vec<ZoneDto>,
+    pub parcels: Vec<ParcelDto>,
 }
 
 // ---------------------------------------------------------------------------

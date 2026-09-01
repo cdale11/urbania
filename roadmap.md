@@ -24,12 +24,14 @@
   - Server `GET /cities/:id/chunks/:cx/:cy` procedural generation + sparse delta, WS `RequestChunk` now generates
   - Client `IsoMap.tsx` fetches 5×5 chunks, renders height-shaded diamonds (water/sand/grass/rock/snow), pan + legend
   - `vite.config` WS proxy `ws:true`, `cargo test` 11 passed, `curl` chunks deterministic, `vite build` OK
-- [ ] **Phase 2 – Zoning + Procedural Development** (priority: high, blockers: Phase 1)
-  - Parcel generation
-  - Zoning system
-  - Development demand calculation
-  - Building archetype selection & procedural geometry
-  - Occupancy simulation
+- [x] **Phase 2a – Zoning + Parcels gap closed** (priority: high, blockers: Phase 1c) (completed 2026-09-01)
+  - `shared-protocol` `ZoneDto`/`ParcelDto`/`ZoneType` (8 types), `persistence` tables `city_zones`/`city_parcels`/`city_buildings` + `create_zone` (2×2 subdivision), `list_zones`/`parcels`
+  - `world-gen` water (`h<0.30`) + vegetation (second perlin 0.35-0.70, 44/256) layers
+  - `urbania-server` `GET/POST /cities/:id/zones`, `DELETE /cities/:id/zones/:zone_id`, `GET /parcels`, `ZoneArea` command + WS delta, snapshot zones/parcels
+  - `IsoMap.tsx` zone brush (Road/Zone toggle, 8-type select, drag rect 30 max, parcel dashed overlay, green vegetation dots), `cargo test` 11, `curl` zones/chunks OK, `vite build` OK
+- [ ] **Phase 2b – Procedural Development** (priority: high, blockers: Phase 2a)
+  - Building archetype selection & procedural geometry (spec 11)
+  - Development demand + occupancy simulation
 - [ ] **Phase 3 – Core population + Economy** (priority: medium, blockers: Phase 2)
   - Household and citizen models
   - Job market and businesses

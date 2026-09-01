@@ -2,6 +2,14 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.6.0] - 2026-09-01
+### Added
+- `shared-protocol` zoning: `ZoneType` (8 variants), `ZoneDto`, `CreateZoneRequest`, `ParcelDto`, `BuildingDto`, `WorldDelta.changed_zones/parcels`, `InitialSnapshot.zones/parcels`.
+- `persistence` zones/parcels/buildings tables (`city_zones`, `city_parcels`, `city_buildings`) + `create_zone` (validates, subdivides into 2×2 parcels), `list_zones`/`list_parcels`/`delete_zone`.
+- `world-gen` water/vegetation: `generate_chunk` now adds `water` bool (h<0.30) and `vegetation` float (second perlin, 0.35-0.70, 44/256 veg on test seed), extra layer for isometric shading.
+- `urbania-server` zones: `GET/POST /cities/:id/zones`, `DELETE /cities/:id/zones/:zone_id`, `GET /cities/:id/parcels`, `command_handler` `ZoneArea` + WS `ZoneArea` delta, snapshot now includes zones/parcels.
+- `IsoMap.tsx` gaps closed: zone brush (Road/Zone toggle, 8-type select, drag rect → `POST /zones`, 30 max, parcel 2×2 overlay dashed), zone fill `zoneColors` + parcel borders, terrain vegetation green dots, `WS` zones/parcels sync, status counts.
+
 ## [0.5.0] - 2026-09-01
 ### Added
 - `world-gen` deterministic terrain: `CHUNK_SIZE=16`, `generate_heights`/`generate_chunk` perlin (scale 0.1, seed+cx/cy offset, range [0,1], deterministic + adjacent continuity tests).
