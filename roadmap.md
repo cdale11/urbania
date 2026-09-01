@@ -1,0 +1,26 @@
+# Roadmap
+
+- [ ] **Phase 0 – Technical skeleton** (priority: high, blockers: none)
+  - Repository layout
+  - Cargo workspace
+  - Vite + React scaffold
+  - Three.js setup (WebGPU/WebGL2 fallback)
+  - Deterministic RNG, fixed simulation clock
+  - Basic save/load stub
+- [ ] **Phase 1 – Terrain + Roads** (priority: high, blockers: Phase 0)
+  - Procedural terrain generation
+  - Water, vegetation
+  - Road graph implementation
+  - Road drawing tool and preview
+  - Chunk streaming
+- [ ] **Phase 2 – Zoning + Procedural Development** (priority: high, blockers: Phase 1)
+  - Parcel generation
+  - Zoning system
+  - Development demand calculation
+  - Building archetype selection & procedural geometry
+  - Occupancy simulation
+- [ ] **Phase 3 – Core population + Economy** (priority: medium, blockers: Phase 2)
+  - Household and citizen models
+  - Job market and businesses
+  - Taxation and income flow
+  - Basic migration and demographic dynamics
